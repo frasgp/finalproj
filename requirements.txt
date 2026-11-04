@@ -1,0 +1,8 @@
+pandas
+numpy
+requests
+networkx
+matplotlib
+ipykernel
+sentence-transformers
+scikit-learn
