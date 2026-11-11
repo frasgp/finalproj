@@ -12,6 +12,11 @@ def load_labeled_works(works_path="data/raw/openalex/works.jsonl",
     works = pd.read_json(works_path, lines=True).drop_duplicates("id").reset_index(drop=True)
     labels = load_retraction_watch(rw_path)[["doi"] + LABEL_COLUMNS]
     merged = works.merge(labels, on="doi", how="left")
+
+    print(f"{merged[LABEL_COLUMNS].notna().any(axis=1).sum()} papers from the retraction watch matched with works data")
+    
+
     merged[LABEL_COLUMNS] = merged[LABEL_COLUMNS].fillna(False).astype(bool)
     merged["high_label_journal"] = merged["source"].isin(HIGH_LABEL)
     return merged
+    

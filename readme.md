@@ -22,3 +22,9 @@ Openalex provides additional data with the Works API that could be worth process
 - keywords
 - concepts
 - counts_by_year (in-degree)
+
+## Data constraints
+
+- lots of papers are missing the abstract
+- fetching lots of papers is not enough to build a dense network : we need to create a core network where we have access to all of the papers, their abstracts, their references and their abstracts
+- lots of retracted papers have had their abstract removed and replaced by a statement saying they were retracted

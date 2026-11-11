@@ -24,4 +24,7 @@ def load_retraction_watch(path):
     df["peer_review"] = _has(reasons, "Compromised Peer Review") | _has(reasons, "Rogue Editor")
     df["referencing"] = _has(reasons, "Referencing/Attributions")
     df["manipulation"] = df["paper_mill"] | df["peer_review"]
+
+    print(f"retraction watch papers with doi : {len(df)}")
+    
     return df[["doi", "Title", "Journal", "paper_mill", "peer_review", "referencing", "manipulation"]].reset_index(drop=True)
