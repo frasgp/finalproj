@@ -6,3 +6,4 @@ matplotlib
 ipykernel
 sentence-transformers
 scikit-learn
+peft
