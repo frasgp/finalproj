@@ -4,3 +4,8 @@
 */__pycache__
 
 dataframes/*
+
+# Export payloads are shared as release assets; commit their manifests instead.
+data/raw/openalex/snapshots/**/works.jsonl.gz
+data/raw/openalex/snapshots/**/aliases.json
+data/raw/openalex/snapshots/.export-*/

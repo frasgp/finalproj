@@ -70,6 +70,67 @@ python scripts_fetch.py        # exit 0 + "COMPLETE" when done; rerun if "INCOMP
 
 ## 3. How the data looks
 
+### Sharing the expanded dataset
+
+Keep `data/raw/openalex/works.jsonl` as the fixed seed cohort. The expansion
+database checks its SHA-256 before resuming; appending there would invalidate
+that check and change the study population in existing notebooks.
+
+From the project root, run (Python 3.9+; standard library only):
+
+```bash
+python3 scripts/export_expanded.py
+```
+
+This exports the seeds followed by successfully retrieved references into
+`data/raw/openalex/snapshots/<snapshot-id>/works.jsonl.gz`. Each directory also
+contains `aliases.json` (requested ID to canonical ID) and `manifest.json`
+(input checksum, counts, fetch coverage, output sizes and SHA-256 checksums).
+The script reads one consistent SQLite transaction, including committed WAL
+data, so fetching can continue. It publishes a complete directory atomically.
+Re-exporting identical inputs reuses the same snapshot; later fetches produce
+a new snapshot. The SQLite file and original JSONL are not modified.
+
+Canonical OpenAlex IDs are deduplicated, with seed records taking precedence.
+Among duplicate references, prefer a nonempty abstract, then the latest fetch.
+Missing abstracts are retained; pending/omitted/404 records are not exported.
+DOIs use the seed format. `record_origin` is `seed` or `reference`.
+For references, `refs` and `authors` are **null (not fetched)**, not empty lists.
+Resolve cited IDs through `aliases.json` when matching citation targets.
+
+Read with `pd.read_json(snapshot_path / "works.jsonl.gz", lines=True)`.
+Filter `record_origin == "seed"` for study subjects. Do not pass the full combined
+file into `load_labeled_works()` as a replacement cohort: reference-only papers
+are context, and missing labels must not turn them into control subjects.
+The existing expansion notebooks still use SQLite; this export is a portable
+corpus for collaboration, not a fetch-resume or embedding-cache backup.
+
+Recommended two-person workflow:
+
+1. Designate one person to fetch and publish a snapshot at agreed milestones.
+2. Commit the exporter and the snapshot's small `manifest.json`. Payloads are
+   ignored by Git. Record a release tag/download location in the commit or PR.
+3. Upload `works.jsonl.gz`, `aliases.json`, and `manifest.json` as assets of a
+   versioned GitHub Release (for example `data-2026-11-11-01`). Keep published
+   snapshots immutable; use a new release for new data.
+4. The collaborator downloads all three files into the matching snapshot folder
+   and checks the payload SHA-256 values against the committed manifest:
+   `shasum -a 256 works.jsonl.gz aliases.json`.
+5. Both people record the same snapshot ID in their analysis results.
+
+GitHub warns above 50 MiB and blocks ordinary Git files above 100 MiB; this is
+not a 50 MB plan limit ([GitHub file limits](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-large-files-on-github)).
+Release assets must each be under 2 GiB ([release limits](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases)).
+If exports outgrow that, use versioned object storage or shard release assets.
+Git LFS is an alternative for automatic checkout/download, but each changed
+version of a large file consumes its full size again in storage, and downloads
+consume bandwidth ([LFS billing](https://docs.github.com/en/billing/concepts/product-billing/git-lfs)).
+For this growing research corpus, milestone release snapshots are simpler.
+Do not split files merely to commit all of them to regular Git: history still
+accumulates the data. The original seed JSONL is already tracked; ignoring it
+would not remove it from history. Coordinate any later Git/LFS history migration
+with your collaborator. This export workflow does not rewrite history.
+
 ### `works.jsonl` (one work per line)
 
 | Field | Type | Meaning |
@@ -160,3 +221,196 @@ df = load_labeled_works()
 - Filter on `source` (not journal name) when selecting a journal.
 - Use `abstract != ""` to restrict to papers that have text.
 - `authors` and `refs` are Python lists of IDs.
+
+## 7. Let a collaborator fetch references using their own OpenAlex account
+
+The reference-fetching code is **`reference_expansion/pipeline.py`**. Its `fetch`
+command requests up to 100 specified OpenAlex work IDs per batch. `--max-requests`
+limits actual HTTP attempts, including individual-ID follow-ups and retries; it is
+not a promised number of completed 100-paper batches.
+
+The **collaboration wrapper is `scripts/collaborative_fetch.py`**. It splits the
+remaining queue into disjoint assignments, reuses the same fetcher, exports
+portable result bundles, and merges completed records into the coordinator's
+original expansion database. It never appends papers to the original seed file
+or `state.json`.
+
+### Account and Python setup (each person)
+
+1. Create your own OpenAlex account, verify your email, and copy your API key from
+   [OpenAlex API settings](https://openalex.org/settings/api).
+2. In your own terminal, set the key:
+
+   ```bash
+   export OPENALEX_API_KEY="your-own-key"
+   ```
+
+   Do not put real keys in Git, shared files, screenshots, or result bundles.
+   The fetcher reads this environment variable; it does **not** automatically
+   load a `.env` file. Set it again in a new terminal session.
+3. Activate a Python environment and install the small fetching dependency:
+
+   ```bash
+   python3 -m pip install requests
+   ```
+
+   Fetching does not require pandas, PyTorch, or sentence-transformers. Those are
+   analysis dependencies. If needed, create a local environment first:
+
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   python3 -m pip install requests
+   ```
+
+OpenAlex currently documents a free verified key with a larger daily budget than
+keyless access. Each person uses their own account allowance; follow the returned
+budget/rate-limit headers. New accounts may have initial pacing restrictions.
+See [authentication and rate limits](https://help.openalex.org/api/authentication/).
+The code saves progress and stops on 429 or the configured budget reserve; it
+neither buys additional usage nor automatically restarts after a daily reset.
+
+### Work packages prepared for this dataset
+
+Current plan: **`4684dc08c4e38e46`**, covering 813,691 pending/omitted IDs.
+
+| Person | Assignment file | Unique requested IDs |
+|---|---|---:|
+| Coordinator (you) | `part-01-of-02.json.gz` | 406,846 |
+| Partner | `part-02-of-02.json.gz` | 406,845 |
+
+They are in:
+
+```text
+reference_expansion/data/work_packages/4684dc08c4e38e46/
+```
+
+Send the partner **part 02** as a file (for example an additional release attachment).
+They save it in that same relative directory in their checkout. The work package
+is a compressed list of IDs/frequencies plus seed/assignment identity and a
+checksum. It contains no API key or original paper text. Do not manually decompress
+or edit it for the helper commands.
+
+**Both people must use their assigned queues during this collaboration. Do not
+also run the old unrestricted master-queue fetch command**, or it may duplicate
+work assigned to your partner. Do not regenerate overlapping work packages while
+these assignments are still in use. Use the two packages from the same plan.
+
+### Your commands (coordinator)
+
+Run from finalproj in your selected environment:
+
+```bash
+python3 scripts/collaborative_fetch.py init \
+  --assignment reference_expansion/data/work_packages/4684dc08c4e38e46/part-01-of-02.json.gz \
+  --db reference_expansion/data/coordinator.sqlite
+
+python3 scripts/collaborative_fetch.py fetch \
+  --db reference_expansion/data/coordinator.sqlite --max-requests 1000
+```
+
+The init step is idempotent. Repeat fetch to resume. For the existing Week1
+interpreter, replace `python3` with `../Week1/.venv/bin/python`.
+
+### Partner's commands
+
+After pulling the committed scripts, receiving part 02, installing `requests`,
+and setting their own key:
+
+```bash
+python3 scripts/collaborative_fetch.py init \
+  --assignment reference_expansion/data/work_packages/4684dc08c4e38e46/part-02-of-02.json.gz \
+  --db reference_expansion/data/partner.sqlite
+
+python3 scripts/collaborative_fetch.py fetch \
+  --db reference_expansion/data/partner.sqlite --max-requests 1000
+```
+
+They can repeat fetch on later days. All progress is saved locally. They do not
+need your master SQLite database or the original seed data to fetch an assignment;
+assignment metadata identifies the expected seed snapshot. The published combined
+snapshot is for analysis, not an interchangeable fetch-resume database.
+
+### Share completed results and merge them
+
+The partner can export results before the entire assignment is complete:
+
+```bash
+python3 scripts/collaborative_fetch.py export-results \
+  --db reference_expansion/data/partner.sqlite \
+  --output reference_expansion/outputs/partner-results-01.json.gz
+```
+
+They send you that `.json.gz` file, not their API key or live SQLite files. It
+contains completed fetched/no-abstract/404 records and provenance, but no embeddings.
+Use a new filename for later changed exports (for example `partner-results-02.json.gz`).
+Reimporting the same completed records is safe.
+
+Save it under `reference_expansion/outputs/` and merge on your machine:
+
+```bash
+python3 scripts/collaborative_fetch.py merge \
+  --bundle reference_expansion/outputs/partner-results-01.json.gz
+```
+
+Merge your own assignment results too:
+
+```bash
+python3 scripts/collaborative_fetch.py export-results \
+  --db reference_expansion/data/coordinator.sqlite \
+  --output reference_expansion/outputs/coordinator-results-01.json.gz
+
+python3 scripts/collaborative_fetch.py merge \
+  --bundle reference_expansion/outputs/coordinator-results-01.json.gz
+```
+
+By default, merges update `reference_expansion/data/references.sqlite`. The helper
+checks bundle integrity, seed identity, requested-ID membership, and payload/status
+consistency, and merges transactionally. Existing fetched abstracts are retained;
+results can improve pending/404/no-abstract states. Newer same-quality records are
+not automatically substituted: refreshing an existing snapshot is a separate task.
+Import history is recorded. Checksums detect accidental corruption, not an
+untrustworthy data provider; exchange bundles with your intended collaborator.
+
+Then create the new combined sharing snapshot using the existing exporter:
+
+```bash
+python3 scripts/export_expanded.py
+```
+
+Publish its `works.jsonl.gz`, `aliases.json`, and `manifest.json` under a new release
+tag, and use the same new snapshot ID for both collaborators' analyses. The old
+frozen exploratory notebook does not automatically incorporate this newer snapshot.
+
+### Future assignments and what to commit
+
+After both current assignments are finished or explicitly retired and merged,
+create a new plan from whatever remains:
+
+```bash
+python3 scripts/collaborative_fetch.py split --parts 2
+```
+
+It prints the new plan folder and assignment paths. It does not start fetching or
+reserve records in the master database; coordination means fetching only the agreed
+assignments, not the unrestricted queue at the same time.
+
+Commit the code and instructions needed for collaboration:
+
+```bash
+git add DATA.md reference_expansion/.gitignore reference_expansion/pipeline.py
+git add scripts/collaborative_fetch.py scripts/test_collaborative_fetch.py
+```
+
+For the expanded-snapshot export workflow, also include its existing code/docs:
+
+```bash
+git add .gitignore scripts/export_expanded.py scripts/test_export_expanded.py
+git add data/raw/openalex/snapshots/*/manifest.json
+```
+
+Review `git diff --cached --stat` before committing. Do **not** stage the entire
+`reference_expansion/` folder unless you also intend to publish all the analysis
+notebooks and helper code. Work packages, databases, and result bundles are under
+ignored `data/` or `outputs/` directories; exchange them as files, not ordinary Git
+objects. Nothing in this workflow uploads files or commits on your behalf.
