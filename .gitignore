@@ -15,5 +15,9 @@ data/raw/openalex/snapshots/.export-*/
 collections/
 data/raw/openalex/snapshots/**/works.jsonl
 
-# Simple refreshed JSONL downloads (share separately from code)
-data/refreshed/
+# Keep downloads local; share the two fixed reference assignments through Git.
+data/refreshed/*
+!data/refreshed/assignments/
+data/refreshed/assignments/*
+!data/refreshed/assignments/justin_ids.json
+!data/refreshed/assignments/partner_ids.json
