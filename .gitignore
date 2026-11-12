@@ -9,3 +9,11 @@ dataframes/*
 data/raw/openalex/snapshots/**/works.jsonl.gz
 data/raw/openalex/snapshots/**/aliases.json
 data/raw/openalex/snapshots/.export-*/
+
+# Isolated collaborative collections and local artifacts
+.DS_Store
+collections/
+data/raw/openalex/snapshots/**/works.jsonl
+
+# Simple refreshed JSONL downloads (share separately from code)
+data/refreshed/
