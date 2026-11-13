@@ -165,7 +165,17 @@ def fetch_ids(input_path, output, ids, origin, limit, client=None):
                 if wid not in found:
                     save(wid,client.get('works/'+wid,{'select':WORK_FIELDS,'corpus':'all'}, single_work=True))
             print(json.dumps({'http_attempts':client.calls,'downloaded':len(done),'not_found':len(missing),'pending':len(wanted-done-missing)}),flush=True)
-    except Stop as exc:print(str(exc),flush=True)
+
+            if start % 1000 == 0:
+                # save missing and done ids
+                with open(done_pickle, "wb") as f:
+                    pickle.dump(done, f)
+                with open(missing_pickle, "wb") as f:
+                    pickle.dump(missing, f)
+
+    except Stop as exc:
+        print(str(exc),flush=True)
+    
     result={'downloaded':len(done),'not_found':len(missing),'pending':len(wanted-done-missing),'output':str(output)}
 
     # save missing and done ids
