@@ -1,6 +1,6 @@
 {
   "seed_sha256": "8d6fe5ac749daff20a083ddfb761d34a22eb7705627da3f45c5c23fecc5f9472",
-  "metadata_version": 3,
+  "metadata_version": 4,
   "shuffle_seed": 42,
   "missing_seed_ids": [],
   "assignment": "partner_ids",

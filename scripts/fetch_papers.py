@@ -14,6 +14,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import pickle
+from dotenv import load_dotenv
+
+load_dotenv()
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.openalex_schema import WORK_FIELDS, METADATA_VERSION, normalize_work
 
@@ -26,7 +30,7 @@ def sha(path):
 
 
 def read_rows(path):
-    with Path(path).open() as f:
+    with Path(path).open(encoding="utf-8", errors="replace") as f:
         for n,line in enumerate(f,1):
             if line.strip():
                 try:yield json.loads(line)
@@ -56,16 +60,23 @@ def tls_context():
 
 class Client:
     def __init__(self, limit):
-        self.limit=limit;self.calls=0
+        self.limit=limit
+        self.calls=0
         self.context=tls_context()
-    def get(self, endpoint, params):
+        self.api_key = os.environ.get('OPENALEX_API_KEY')
+        print(f"using api key {self.api_key}")
+
+    def get(self, endpoint, params, single_work: bool = False):
         params=dict(params)
-        if os.environ.get('OPENALEX_API_KEY'):params['api_key']=os.environ['OPENALEX_API_KEY']
+        if self.api_key:
+            params['api_key']=self.api_key
         url='https://api.openalex.org/'+endpoint+'?'+urllib.parse.urlencode(params)
         reason="unknown network error"
         for attempt in range(4):
             if self.calls>=self.limit:raise Stop('Request limit reached. Run the same command again to resume.')
-            self.calls+=1
+            if not single_work: 
+                # only filtered queries are counted towards the api limit
+                self.calls+=1
             try:
                 with urllib.request.urlopen(url,timeout=90,context=self.context) as response:
                     result=json.load(response)
@@ -91,8 +102,12 @@ class Client:
 def fetch_ids(input_path, output, ids, origin, limit, client=None):
     output=Path(output);output.parent.mkdir(parents=True,exist_ok=True)
     if Path(input_path).resolve()==output.resolve():raise ValueError('Output must not overwrite input')
-    ids=list(dict.fromkeys(ids));wanted=set(ids)
-    manifest=output.with_suffix('.manifest.json');errors=output.with_suffix('.failures.jsonl')
+    ids=list(dict.fromkeys(ids))
+    wanted=set(ids)
+    manifest=output.with_suffix('.manifest.json')
+    errors=output.with_suffix('.failures.jsonl')
+    done_pickle=output.with_suffix('.done.pickle')
+    missing_pickle=output.with_suffix('.missing.pickle')
     config={'input_sha256':sha(input_path),'metadata_version':METADATA_VERSION,'fields':WORK_FIELDS,
             'record_origin':origin,'target_count':len(ids)}
     if origin=='reference':
@@ -103,11 +118,28 @@ def fetch_ids(input_path, output, ids, origin, limit, client=None):
     else:
         if output.exists() or errors.exists():raise ValueError('Output exists without its resume manifest')
         write_json(manifest,config)
-    done={r['requested_id'] for r in read_rows(output)} if output.exists() else set()
-    missing={r['requested_id'] for r in read_rows(errors)} if errors.exists() else set()
+
+    # unpickle done and missing ids without reading past fetches for faster startup
+    print("loading done : ", end="")
+    if done_pickle.exists():
+        with open(done_pickle, "rb") as f:
+            done = pickle.load(f)
+    else:
+        done = set()
+    print("OK")
+    print("loading missing : ", end="")
+    if missing_pickle.exists():
+        with open(missing_pickle, "rb") as f:
+            missing = pickle.load(f)
+    else:
+        missing = set()
+    print("OK")
+
+    # done={r['requested_id'] for r in read_rows(output)} if output.exists() else set()
+    # missing={r['requested_id'] for r in read_rows(errors)} if errors.exists() else set()
     if (done|missing)-wanted:raise ValueError('Output contains IDs outside this assignment')
     output.touch(exist_ok=True)
-    pending=[i for i in ids if i not in done|missing]
+    pending = list(wanted - (done|missing))
     client=client or Client(limit)
     def save(wid, raw):
         if raw is None:
@@ -116,9 +148,9 @@ def fetch_ids(input_path, output, ids, origin, limit, client=None):
             missing.add(wid);return
         if not isinstance(raw,dict) or not isinstance(raw.get('id'),str):raise Stop('Malformed work response; rerun to retry')
         row=normalize_work(raw)
-        row.update(requested_id=wid,record_origin=origin,raw=raw)
-        with output.open('a') as f:
-            f.write(json.dumps(row,ensure_ascii=False,separators=(',',':'))+'\n');f.flush();os.fsync(f.fileno())
+        row.update(requested_id=wid,record_origin=origin)
+        with output.open('a', encoding="utf-8") as f:
+            f.write(json.dumps(row,ensure_ascii=False,separators=(',',':'), check_circular=False)+'\n');f.flush();os.fsync(f.fileno())
         done.add(wid)
     try:
         for start in range(0,len(pending),100):
@@ -127,12 +159,23 @@ def fetch_ids(input_path, output, ids, origin, limit, client=None):
             if not isinstance(data,dict) or not isinstance(data.get('results'),list):raise Stop('Malformed batch; rerun to retry')
             found={r['id'].rsplit('/',1)[-1]:r for r in data['results']}
             for wid in batch:
-                if wid in found:save(wid,found[wid])
+                if wid in found:
+                    save(wid,found[wid])
             for wid in batch:
-                if wid not in found:save(wid,client.get('works/'+wid,{'select':WORK_FIELDS,'corpus':'all'}))
+                if wid not in found:
+                    save(wid,client.get('works/'+wid,{'select':WORK_FIELDS,'corpus':'all'}, single_work=True))
             print(json.dumps({'http_attempts':client.calls,'downloaded':len(done),'not_found':len(missing),'pending':len(wanted-done-missing)}),flush=True)
     except Stop as exc:print(str(exc),flush=True)
     result={'downloaded':len(done),'not_found':len(missing),'pending':len(wanted-done-missing),'output':str(output)}
+
+    # save missing and done ids
+    print("Saving missing and done")
+    with open(done_pickle, "wb") as f:
+        pickle.dump(done, f)
+    with open(missing_pickle, "wb") as f:
+        pickle.dump(missing, f)
+    print("missing and done saved")
+
     print(json.dumps(result,indent=2));return result
 
 
